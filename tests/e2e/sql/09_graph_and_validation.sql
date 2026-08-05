@@ -218,6 +218,27 @@ END $$;
 
 DO $$
 DECLARE
+    condition_graph TEXT := df.sql('SELECT true');
+    graph TEXT;
+    explanation TEXT;
+BEGIN
+    -- 129 levels intentionally exceed serde_json's default 128-level recursion limit.
+    FOR i IN 1..129 LOOP
+        condition_graph := df.seq(condition_graph, 'SELECT true');
+    END LOOP;
+
+    graph := df.if(condition_graph, 'SELECT 1', 'SELECT 0');
+    explanation := df.explain(graph);
+    IF explanation LIKE 'Invalid durable function graph:%'
+       OR pg_catalog.regexp_count(explanation, '→') != 129 THEN
+        RAISE EXCEPTION 'TEST FAILED: deep condition graph was corrupted: %', explanation;
+    END IF;
+
+    RAISE NOTICE 'TEST PASSED: config children compose beyond serde recursion limit';
+END $$;
+
+DO $$
+DECLARE
     graph TEXT := df.sql('SELECT 1');
     explanation TEXT;
 BEGIN
