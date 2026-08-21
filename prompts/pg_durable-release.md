@@ -132,6 +132,9 @@ Confirm these are consistent on the release commit:
 - The upgrade script `sql/pg_durable--<prev>--X.Y.Z.sql` exists (even if it only
   carries the license header + upgrade stub).
 - Any version-stamped `expected/` fixtures are consistent.
+- `META.json.in` is present and `make META.json` renders the release
+  version. The PGXN metadata is generated from `Cargo.toml`, so there is no
+  separate version to bump.
 
 > **Update the tracking issue:** tick **Version/upgrade-script sanity**.
 
@@ -320,6 +323,77 @@ nothing).
 
 > **Update the tracking issue:** link the Docker Publish run and tick **GHCR
 > images confirmed**.
+
+## Step 6b: Publish to PGXN
+
+**This step is deliberately manual.** A PGXN upload is not a routine artifact
+push: it publishes to a public registry under an account the project owns, and
+the first upload permanently claims both the distribution name `pg_durable` and
+the extension name it provides. Keep a human watching it until the process has
+been run successfully a few times; automating it inside the Package Release
+workflow can come later, once there is nothing left to learn.
+
+Requires the `PGXN_USERNAME` and `PGXN_PASSWORD` credentials for the project's
+PGXN account.
+
+### First, build and validate without uploading
+
+Nothing is uploaded by this step, and invalid metadata fails here rather than in
+front of an audience:
+
+```bash
+git checkout vX.Y.Z
+docker run --rm -v "$PWD:/repo" -w /repo pgxn/pgxn-tools sh -c '
+  make META.json &&
+  pgxn validate-meta META.json &&
+  make pgxn-zip'
+```
+
+Expect `META.json is OK`. Then inspect what you are about to publish:
+
+```bash
+unzip -l pg_durable-X.Y.Z.zip | grep META.json   # must be at the archive root
+```
+
+Check that the version in `META.json` matches the tag, and that `provides`
+names the extension you intend to claim.
+
+> **Why not `pgxn-bundle`?** It is the upstream wrapper for exactly this step,
+> but it has two traps here, both verified against `pgxn/pgxn-tools`. It archives
+> only committed files unless `GIT_BUNDLE_OPTS` is set, and `META.json` is
+> generated and gitignored — so a plain `pgxn-bundle` silently produces an
+> archive containing **no `META.json` at all**, which is the one file PGXN
+> requires. It also ends with
+> `[ -n "${GITHUB_OUTPUT:-}" ] && echo ... >> "$GITHUB_OUTPUT"`, so outside
+> GitHub Actions it **exits 1 even on success**, which silently breaks any `&&`
+> chain built on it. `make pgxn-zip` already passes `--add-file META.json` and
+> exits 0, and `pgxn validate-meta` performs the same Meta Spec check.
+
+### Then upload
+
+Pass the zip built above explicitly, so the upload cannot be chained onto a
+command whose exit status is unreliable:
+
+```bash
+docker run --rm -v "$PWD:/repo" -w /repo \
+  -e PGXN_USERNAME -e PGXN_PASSWORD \
+  pgxn/pgxn-tools pgxn-release pg_durable-X.Y.Z.zip
+```
+
+Confirm the distribution at <https://pgxn.org/dist/pg_durable/>, and check that
+the README and documentation render — PGXN indexes documentation for search, so
+a distribution whose docs fail to render is much harder to find.
+
+### On the very first upload
+
+Consider setting `release_status` to `testing` in `META.json.in` for the first
+release only. Per the Meta Spec, a `testing` distribution should not be
+installed over a stable release without an explicit request, and stays out of
+the default search index. That claims the name and exercises the whole path
+while keeping automated clients away from a release nobody has installed from
+PGXN yet. Switch to `stable` for the following release.
+
+> **Update the tracking issue:** tick **PGXN release confirmed**.
 
 ## Step 7: Open the next development cycle
 
